@@ -4,6 +4,9 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+
 from sklearn.metrics import (
     mean_absolute_error, 
     mean_squared_error, 
@@ -21,7 +24,7 @@ RANDOM_STATE = 42
 FEATURES = [
     "RENDA_MEDIA",
     "RENDA_MEDIANA",
-    # "TAXA_ALFABETIZACAO",
+    "TAXA_ALFABETIZACAO",
     "TAXA_URBANIZACAO",
     # "ESCOLA_POR_10k_HABITANTES",
     "ALUNOS_POR_DOCENTE",
@@ -119,6 +122,38 @@ def PrepareIncome():
 
     return income
 
+def PrepareLiteracy():
+    literacyRaw = pd.read_csv(
+        RAW_PATH + "tabela9543.csv",
+        sep=";",
+        encoding="utf-8",
+        dtype={"Cód.": "string"}
+    )
+
+    literacy = literacyRaw[
+        ["Cód.", "Total"]
+    ].copy()
+
+    literacy = literacy.rename(columns={
+        "Cód.": "COD",
+        "Total": "TAXA_ALFABETIZACAO"
+    })
+
+    literacy["COD"] = NormalizeCodCity(literacy["COD"])
+
+    literacy["TAXA_ALFABETIZACAO"] = (
+        literacy["TAXA_ALFABETIZACAO"]
+        .astype("string")
+        .str.replace(",", ".", regex=False)
+    )
+
+    literacy["TAXA_ALFABETIZACAO"] = pd.to_numeric(
+        literacy["TAXA_ALFABETIZACAO"],
+        errors="coerce"
+    )
+
+    return literacy
+
 def PrepareSchools():
     schoolsRaw = pd.read_csv(
         RAW_PATH + "microdados_ed_basica_2022.csv",
@@ -204,6 +239,7 @@ def MergeDatasets(
         ideb2023, 
         cities, 
         income,
+        literacy,
         urbanization
     ):
 
@@ -216,6 +252,13 @@ def MergeDatasets(
 
     dataset = dataset.merge(
         income,
+        on="COD",
+        how="left",
+        validate="one_to_one"
+    )
+
+    dataset = dataset.merge(
+        literacy,
         on="COD",
         how="left",
         validate="one_to_one"
@@ -291,7 +334,10 @@ def EvaluateRegression(yReal, yPred, name):
 def RunLinearRegression(dataset):
     xTrain, xTest, yTrain, yTest = PrepareML(dataset)
 
-    model = LinearRegression()
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("regression", LinearRegression())
+    ])
 
     model.fit(xTrain, yTrain)
 
@@ -309,11 +355,13 @@ def RunLinearRegression(dataset):
         "Linear Regression - Test"
     )
 
+    linearRegression = model.named_steps["regression"]
+
     print("\nWeights: ")
-    for feature, coef in zip(FEATURES, model.coef_):
+    for feature, coef in zip(FEATURES, linearRegression.coef_):
         print(f"{feature}: {coef:.4f}")
 
-    print(f"\nBias: {model.intercept_:.4f}")
+    print(f"\nBias: {linearRegression.intercept_:.4f}")
 
     print("\nPrevisões: ")
     predictions = pd.DataFrame({
@@ -345,12 +393,14 @@ def main():
     ideb2023 = PrepareIDEB()
     cities = PrepareSchools()
     income = PrepareIncome()
+    literacy = PrepareLiteracy()
     urbanization = PrepareUrbanization()
 
     dataset = MergeDatasets(
         ideb2023,
         cities,
         income,
+        literacy,
         urbanization
     )
 
